@@ -1,4 +1,4 @@
 google-generativeai
 python-dotenv
-duckduckgo-search
+ddgs
 

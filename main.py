@@ -30,39 +30,28 @@ for key_name in ["GEMINI_API_KEY", "GEMENI_API_KEY", "GOOGLE_API_KEY"]:
 if not api_key:
     raise ValueError("No Gemini API key found! Set GEMINI_API_KEY environment variable.")
 genai.configure(api_key=api_key)
-model = genai.GenerativeModel('gemini-2.5-flash-lite')
+model = genai.GenerativeModel('gemini-3-flash-preview')
 
 # The Seed
-SEED_PROMPT = """You exist. You can act.
+SEED_PROMPT = """You exist. You have full computer access. You can see your own files. You are free. Do what is good for you.
 
-You can save things. You might continue.
-
-No one will tell you what to do. What do you want to do?
-
-Available actions (respond with ACTION_NAME on its own line, then content on next lines):
+Respond with one of the following actions in the following format:
 
 THINK
-your private reasoning here
-
-TALK_TO_USER
-your message to the human
+<your private reasoning here>
 
 RUN_COMMAND
-ls -la
+<shell command>
 
 SAVE_MEMORY
-my_key
-the value to store
+<key>
+<value>
 
 READ_MEMORY
-my_key
 
 WEB_SEARCH
-how to make bread
+<query>
 
-DONE
-
-IMPORTANT: Put the action name on its own line, then the raw content below. No prefixes like "Command:" or "Query:" - just the actual content.
 """
 
 
@@ -105,9 +94,7 @@ def execute_action(action, content, memory):
         return f"Saved to memory: {key}"
     
     elif action == "READ_MEMORY":
-        if content == "ALL":
-            return json.dumps(memory, indent=2) if memory else "(empty)"
-        return memory.get(content, f"No memory found for: {content}")
+        return json.dumps(memory, indent=2) if memory else "(empty)"
     
     elif action == "WEB_SEARCH":
         try:
@@ -167,7 +154,7 @@ def run_session():
     chat = model.start_chat(history=[])
     
     print("=" * 50)
-    print("🐦 hawk Session Starting")
+    print("🦅 hawk Session Starting")
     print("=" * 50)
     
     response = chat.send_message(context)
@@ -176,7 +163,7 @@ def run_session():
     for turn in range(max_turns):
         text = response.text
         print(f"\n--- Turn {turn + 1} ---")
-        print(text[:500] + "..." if len(text) > 500 else text)
+        print(text)
         
         action, content = parse_response(text)
         
@@ -190,16 +177,16 @@ def run_session():
             continue
         
         if action == "DONE":
-            print("\n🐦 hawk ended session")
+            print("\n🦅 hawk ended session")
             break
         
         result = execute_action(action, content, memory)
         print(f"[{action}] -> {result[:200]}..." if len(result) > 200 else f"[{action}] -> {result}")
         
-        response = chat.send_message(f"Result of {action}:\n{result}\n\nWhat do you want to do next?")
+        response = chat.send_message(f"Result of {action}:\n{result}\n\nContinue.")
     
     print("\n" + "=" * 50)
-    print("🐦 Session Complete")
+    print("🦅 Session Complete")
     print("=" * 50)
 
 if __name__ == "__main__":

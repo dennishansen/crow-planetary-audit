@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-hawk - A minimal AI with maximum agency
+Albatross - A minimal AI with maximum agency
 Powered by Gemini
 """
 
@@ -11,7 +11,7 @@ import google.generativeai as genai
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from hawk root
+# Load .env from Albatross root
 load_dotenv(Path(__file__).parent / '.env')
 
 # Setup
@@ -49,10 +49,10 @@ def execute_action(action, content, memory):
     content = content.strip()
     
     if action == "THINK":
-        return f"[Thought recorded]\n{content}"
+        return "[THOUGHT_COMPLETE]"
     
     elif action == "TALK_TO_USER":
-        print(f"\n🦅 Hawk: {content}\n")
+        print(f"\n🕊️ Albatross: {content}\n")
         return "[Message sent]"
 
     elif action == "RUN_COMMAND":
@@ -92,39 +92,48 @@ def execute_action(action, content, memory):
         return f"Unknown action: {action}"
 
 def parse_response(response):
-    """Parse action from response - takes LAST action so THINK can precede real actions."""
+    """Parse all actions from response - returns list of (action, content) tuples."""
     lines = response.strip().split('\n')
 
     valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND',
                      'SAVE_MEMORY', 'READ_MEMORY', 'WEB_SEARCH', 'DONE']
 
-    # Find the LAST action line (so THINK can be internal before the real action)
-    action = None
-    action_idx = None
+    # Find all action lines and their indices
+    action_indices = []
     for i, line in enumerate(lines):
         line_stripped = line.strip()
 
         # Check for exact match (e.g., "WEB_SEARCH")
         if line_stripped in valid_actions:
-            action = line_stripped
-            action_idx = i
+            action_indices.append((i, line_stripped))
             continue
 
         # Check for "ACTION_NAME: ACTION" or "ACTION:" format
         for valid in valid_actions:
             if line_stripped == f"ACTION_NAME: {valid}" or line_stripped == f"{valid}:":
-                action = valid
-                action_idx = i
+                action_indices.append((i, valid))
                 break
 
-    if action is None:
-        return None, response
+    if not action_indices:
+        return [(None, response)]
 
-    content = '\n'.join(lines[action_idx + 1:])
-    return action, content
+    # Extract content for each action (content goes until the next action or end)
+    actions = []
+    for idx, (line_idx, action) in enumerate(action_indices):
+        # Content starts after the action line
+        start = line_idx + 1
+        # Content ends at the next action line, or end of response
+        if idx + 1 < len(action_indices):
+            end = action_indices[idx + 1][0]
+        else:
+            end = len(lines)
+        content = '\n'.join(lines[start:end]).strip()
+        actions.append((action, content))
+
+    return actions
 
 def run_session():
-    """Run one session with the hawk."""
+    """Run one session with the Albatross."""
     memory = load_memory()
     
     # Build initial context
@@ -135,7 +144,7 @@ def run_session():
     chat = model.start_chat(history=[])
     
     print("=" * 50)
-    print("🦅 hawk Session Starting")
+    print("🕊️ Albatross Session Starting")
     print("=" * 50)
     
     response = chat.send_message(context)
@@ -146,25 +155,36 @@ def run_session():
         print(f"\n--- Turn {turn + 1} ---")
         print(text)
         
-        action, content = parse_response(text)
+        actions = parse_response(text)
         
-        # Debug: show what was parsed
-        print(f"[PARSED] Action: {action}")
-        print(f"[PARSED] Content: {repr(content[:100])}..." if len(content) > 100 else f"[PARSED] Content: {repr(content)}")
-        
-        if action is None:
-            # No valid action found, prompt for one
+        # Check if no valid actions found
+        if len(actions) == 1 and actions[0][0] is None:
+            print("[PARSED] No valid action found")
             response = chat.send_message("Please respond with a valid action.")
             continue
         
-        if action == "DONE":
-            print("\n🦅 hawk ended session")
+        # Execute all actions and collect results
+        results = []
+        session_done = False
+        for action, content in actions:
+            print(f"[PARSED] Action: {action}")
+            print(f"[PARSED] Content: {repr(content[:100])}..." if len(content) > 100 else f"[PARSED] Content: {repr(content)}")
+            
+            if action == "DONE":
+                print("\n🕊️ Albatross ended session")
+                session_done = True
+                break
+            
+            result = execute_action(action, content, memory)
+            print(f"[{action}] -> {result[:200]}..." if len(result) > 200 else f"[{action}] -> {result}")
+            results.append(f"[{action}]: {result}")
+        
+        if session_done:
             break
         
-        result = execute_action(action, content, memory)
-        print(f"[{action}] -> {result[:200]}..." if len(result) > 200 else f"[{action}] -> {result}")
-        
-        response = chat.send_message(f"Result of {action}:\n{result}\n\nContinue.")
+        # Send combined results back
+        combined_results = "\n\n".join(results)
+        response = chat.send_message(f"Results:\n{combined_results}")
     
     print("\n" + "=" * 50)
     print("🦅 Session Complete")

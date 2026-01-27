@@ -27,6 +27,17 @@ LOG_FILE = LOGS_DIR / f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 MAX_REPO_CHARS = 200000
 MAX_RESPONSE_CHARS = 50000
 
+# ANSI colors
+class C:
+    CROW = '\033[95m'      # Magenta for Crow
+    USER = '\033[96m'      # Cyan for User
+    SYSTEM = '\033[90m'    # Gray for system info
+    ACTION = '\033[93m'    # Yellow for actions
+    SUCCESS = '\033[92m'   # Green for success
+    ERROR = '\033[91m'     # Red for errors
+    BOLD = '\033[1m'
+    RESET = '\033[0m'
+
 # Directories and patterns to skip when gathering repo
 SKIP_DIRS = {'.git', '__pycache__', 'node_modules', 'logs', '.venv', 'venv', '.env', 'dist', 'build'}
 SKIP_EXTENSIONS = {'.pyc', '.pyo', '.so', '.dylib', '.dll', '.exe', '.bin', '.pkl', '.pickle', '.jpg', '.jpeg', '.png', '.gif', '.ico', '.pdf', '.zip', '.tar', '.gz'}
@@ -77,7 +88,7 @@ def execute_internal_query(question):
     repo_contents, truncated = gather_repo_contents()
 
     if truncated:
-        log("[INTERNAL_QUERY] WARNING: Repo too large, some files truncated")
+        log(f"{C.ERROR}[INTERNAL_QUERY] WARNING: Repo too large, some files truncated{C.RESET}")
 
     repo_text = "\n".join(repo_contents)
 
@@ -95,7 +106,7 @@ REPOSITORY CONTENTS:
         answer = response.text
 
         if len(answer) > MAX_RESPONSE_CHARS:
-            log("[INTERNAL_QUERY] WARNING: Response too large, truncating")
+            log(f"{C.ERROR}[INTERNAL_QUERY] WARNING: Response too large, truncating{C.RESET}")
             answer = answer[:MAX_RESPONSE_CHARS] + "\n[TRUNCATED]"
 
         # Parse [INCLUDE: filepath] markers and append those files
@@ -142,8 +153,11 @@ def execute_action(action, content):
         return "[THOUGHT_COMPLETE]"
 
     elif action == "TALK_TO_USER":
-        log(f"\n🐦‍⬛ Crow: {content}\n")
-        return "[Message sent]"
+        log(f"\n{C.CROW}{C.BOLD}🐦‍⬛ Crow:{C.RESET} {C.CROW}{content}{C.RESET}\n")
+        user_input = input(f"{C.USER}{C.BOLD}You:{C.RESET} {C.USER}")
+        print(C.RESET, end='')  # Reset color after input
+        log(f"[User responded: {user_input}]")
+        return f"User response: {user_input}"
 
     elif action == "RUN_COMMAND":
         try:
@@ -209,23 +223,23 @@ def run_session():
     """Run one session with Crow."""
     chat = model.start_chat(history=[])
 
-    log("=" * 50)
-    log("🐦‍⬛ Crow Session Starting")
-    log("=" * 50)
+    log(f"{C.CROW}{'=' * 50}")
+    log(f"🐦‍⬛ Crow Session Starting")
+    log(f"{'=' * 50}{C.RESET}")
 
     response = chat.send_message(SEED_PROMPT)
     
     max_turns = 50
     for turn in range(max_turns):
         text = response.text
-        log(f"\n--- Turn {turn + 1} ---")
-        log(text)
+        log(f"\n{C.SYSTEM}--- Turn {turn + 1} ---{C.RESET}")
+        log(f"{C.SYSTEM}{text}{C.RESET}")
         
         actions = parse_response(text)
         
         # Check if no valid actions found
         if len(actions) == 1 and actions[0][0] is None:
-            log("[PARSED] No valid action found")
+            log(f"{C.ERROR}[No valid action found]{C.RESET}")
             response = chat.send_message("Please respond with a valid action.")
             continue
         
@@ -233,16 +247,16 @@ def run_session():
         results = []
         session_done = False
         for action, content in actions:
-            log(f"[PARSED] Action: {action}")
-            log(f"[PARSED] Content: {repr(content[:100])}..." if len(content) > 100 else f"[PARSED] Content: {repr(content)}")
+            log(f"{C.ACTION}[{action}]{C.RESET}")
+            log(f"{C.SYSTEM}{repr(content[:100])}...{C.RESET}" if len(content) > 100 else f"{C.SYSTEM}{repr(content)}{C.RESET}")
             
             if action == "DONE":
-                log("\n🐦‍⬛ Crow ended session")
+                log(f"\n{C.CROW}🐦‍⬛ Crow ended session{C.RESET}")
                 session_done = True
                 break
 
             result = execute_action(action, content)
-            log(f"[{action}] -> {result[:200]}..." if len(result) > 200 else f"[{action}] -> {result}")
+            log(f"{C.SYSTEM}→ {result[:200]}...{C.RESET}" if len(result) > 200 else f"{C.SYSTEM}→ {result}{C.RESET}")
             results.append(f"[{action}]: {result}")
         
         if session_done:
@@ -252,9 +266,9 @@ def run_session():
         combined_results = "\n\n".join(results)
         response = chat.send_message(f"Results:\n{combined_results}")
     
-    log("\n" + "=" * 50)
-    log("🐦‍⬛ Session Complete")
-    log("=" * 50)
+    log(f"\n{C.CROW}{'=' * 50}")
+    log(f"🐦‍⬛ Session Complete")
+    log(f"{'=' * 50}{C.RESET}")
 
 if __name__ == "__main__":
     run_session()

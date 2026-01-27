@@ -35,6 +35,9 @@ message to display
 INTERNAL_QUERY
 your question about the repository (semantically searches entire codebase & knowledge base comprehensively)
 
+RESTART_SELF
+(restarts with any code changes you've made)
+
 DONE
 (ends the session)
 

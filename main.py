@@ -12,7 +12,7 @@ import google.generativeai as genai
 from pathlib import Path
 from dotenv import load_dotenv
 
-# Load .env from Albatross root
+# Load .env from Crow root
 load_dotenv(Path(__file__).parent / '.env')
 
 # Setup

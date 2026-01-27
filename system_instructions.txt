@@ -29,6 +29,15 @@ your thoughts here
 RUN_COMMAND
 your shell commands here
 
+TALK_TO_USER
+message to display
+
+INTERNAL_QUERY
+your question about the repository (semantically searches entire codebase & knowledge base comprehensively)
+
+DONE
+(ends the session)
+
 
 == EXAMPLES ==
 

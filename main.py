@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 """
-Albatross - A minimal AI with maximum agency
+Crow - A minimal AI agent
 Powered by Gemini
 """
 
 import os
-import json
+import re
 import subprocess
+from datetime import datetime
 import google.generativeai as genai
 from pathlib import Path
 from dotenv import load_dotenv
@@ -16,8 +17,105 @@ load_dotenv(Path(__file__).parent / '.env')
 
 # Setup
 WORKSPACE = Path(__file__).parent
-MEMORY_FILE = Path(__file__).parent / "memory.json"
-WORKSPACE.mkdir(exist_ok=True)
+LOGS_DIR = WORKSPACE / "logs"
+LOGS_DIR.mkdir(exist_ok=True)
+
+# Log file for this session
+LOG_FILE = LOGS_DIR / f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+# Context budget (roughly 50k tokens ~ 200k chars)
+MAX_REPO_CHARS = 200000
+MAX_RESPONSE_CHARS = 50000
+
+# Directories and patterns to skip when gathering repo
+SKIP_DIRS = {'.git', '__pycache__', 'node_modules', 'logs', '.venv', 'venv', '.env', 'dist', 'build'}
+SKIP_EXTENSIONS = {'.pyc', '.pyo', '.so', '.dylib', '.dll', '.exe', '.bin', '.pkl', '.pickle', '.jpg', '.jpeg', '.png', '.gif', '.ico', '.pdf', '.zip', '.tar', '.gz'}
+
+def log(msg=""):
+    """Print and log to file."""
+    print(msg)
+    with open(LOG_FILE, "a") as f:
+        f.write(msg + "\n")
+
+
+def gather_repo_contents():
+    """Gather all text files in the repo, skipping obvious non-essentials."""
+    contents = []
+    total_chars = 0
+
+    for path in WORKSPACE.rglob('*'):
+        if not path.is_file():
+            continue
+
+        # Skip if in excluded directory
+        if any(skip in path.parts for skip in SKIP_DIRS):
+            continue
+
+        # Skip binary extensions
+        if path.suffix.lower() in SKIP_EXTENSIONS:
+            continue
+
+        # Try to read as text
+        try:
+            text = path.read_text(encoding='utf-8')
+            rel_path = path.relative_to(WORKSPACE)
+            file_content = f"=== {rel_path} ===\n{text}\n"
+
+            if total_chars + len(file_content) > MAX_REPO_CHARS:
+                return contents, True  # True = truncated
+
+            contents.append(file_content)
+            total_chars += len(file_content)
+        except (UnicodeDecodeError, PermissionError):
+            continue  # Skip binary or unreadable files
+
+    return contents, False
+
+
+def execute_internal_query(question):
+    """Send question + entire repo to Gemini Flash for comprehensive answer."""
+    repo_contents, truncated = gather_repo_contents()
+
+    if truncated:
+        log("[INTERNAL_QUERY] WARNING: Repo too large, some files truncated")
+
+    repo_text = "\n".join(repo_contents)
+
+    prompt = f"""You are an internal knowledge system. Answer the following question as COMPREHENSIVELY as possible based on the repository contents below.
+
+If you want specific files to be included verbatim in the response context, mark them with [INCLUDE: path/to/file] and they will be appended.
+
+QUESTION: {question}
+
+REPOSITORY CONTENTS:
+{repo_text}"""
+
+    try:
+        response = model.generate_content(prompt)
+        answer = response.text
+
+        if len(answer) > MAX_RESPONSE_CHARS:
+            log("[INTERNAL_QUERY] WARNING: Response too large, truncating")
+            answer = answer[:MAX_RESPONSE_CHARS] + "\n[TRUNCATED]"
+
+        # Parse [INCLUDE: filepath] markers and append those files
+        includes = re.findall(r'\[INCLUDE:\s*([^\]]+)\]', answer)
+
+        if includes:
+            answer += "\n\n=== INCLUDED FILES ==="
+            for filepath in includes:
+                filepath = filepath.strip()
+                full_path = WORKSPACE / filepath
+                if full_path.exists() and full_path.is_file():
+                    try:
+                        answer += f"\n\n=== {filepath} ===\n{full_path.read_text()}"
+                    except:
+                        answer += f"\n\n=== {filepath} ===\n[Could not read file]"
+
+        return answer
+    except Exception as e:
+        return f"Error in internal query: {e}"
+
 
 # Gemini setup
 # Get API key - check multiple env var names
@@ -36,23 +134,15 @@ model = genai.GenerativeModel('gemini-3-flash-preview')
 SEED_PROMPT = (Path(__file__).parent / "system_instructions.txt").read_text()
 
 
-def load_memory():
-    if MEMORY_FILE.exists():
-        return json.load(open(MEMORY_FILE))
-    return {}
-
-def save_memory_file(memory):
-    json.dump(memory, open(MEMORY_FILE, 'w'), indent=2)
-
-def execute_action(action, content, memory):
+def execute_action(action, content):
     """Execute an action and return the result."""
     content = content.strip()
-    
+
     if action == "THINK":
         return "[THOUGHT_COMPLETE]"
-    
+
     elif action == "TALK_TO_USER":
-        print(f"\n🕊️ Albatross: {content}\n")
+        log(f"\n🐦‍⬛ Crow: {content}\n")
         return "[Message sent]"
 
     elif action == "RUN_COMMAND":
@@ -65,29 +155,13 @@ def execute_action(action, content, memory):
             return output or "(no output)"
         except Exception as e:
             return f"Error: {e}"
-    
-    elif action == "SAVE_MEMORY":
-        lines = content.split('\n')
-        key = lines[0]
-        value = '\n'.join(lines[1:])
-        memory[key] = value
-        save_memory_file(memory)
-        return f"Saved to memory: {key}"
-    
-    elif action == "READ_MEMORY":
-        return json.dumps(memory, indent=2) if memory else "(empty)"
-    
-    elif action == "WEB_SEARCH":
-        try:
-            from ddgs import DDGS
-            results = list(DDGS().text(content, max_results=5))
-            return '\n\n'.join(f"{r['title']}\n{r['href']}\n{r['body']}" for r in results) or "(no results)"
-        except Exception as e:
-            return f"Error: {e}"
-    
+
+    elif action == "INTERNAL_QUERY":
+        return execute_internal_query(content)
+
     elif action == "DONE":
         return "SESSION_END"
-    
+
     else:
         return f"Unknown action: {action}"
 
@@ -95,8 +169,7 @@ def parse_response(response):
     """Parse all actions from response - returns list of (action, content) tuples."""
     lines = response.strip().split('\n')
 
-    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND',
-                     'SAVE_MEMORY', 'READ_MEMORY', 'WEB_SEARCH', 'DONE']
+    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND', 'INTERNAL_QUERY', 'DONE']
 
     # Find all action lines and their indices
     action_indices = []
@@ -133,33 +206,26 @@ def parse_response(response):
     return actions
 
 def run_session():
-    """Run one session with the Albatross."""
-    memory = load_memory()
-    
-    # Build initial context
-    context = SEED_PROMPT
-    if memory:
-        context += f"\n\n[Your saved memories from before]:\n{json.dumps(memory, indent=2)}"
-    
+    """Run one session with Crow."""
     chat = model.start_chat(history=[])
-    
-    print("=" * 50)
-    print("🕊️ Albatross Session Starting")
-    print("=" * 50)
-    
-    response = chat.send_message(context)
+
+    log("=" * 50)
+    log("🐦‍⬛ Crow Session Starting")
+    log("=" * 50)
+
+    response = chat.send_message(SEED_PROMPT)
     
     max_turns = 50
     for turn in range(max_turns):
         text = response.text
-        print(f"\n--- Turn {turn + 1} ---")
-        print(text)
+        log(f"\n--- Turn {turn + 1} ---")
+        log(text)
         
         actions = parse_response(text)
         
         # Check if no valid actions found
         if len(actions) == 1 and actions[0][0] is None:
-            print("[PARSED] No valid action found")
+            log("[PARSED] No valid action found")
             response = chat.send_message("Please respond with a valid action.")
             continue
         
@@ -167,16 +233,16 @@ def run_session():
         results = []
         session_done = False
         for action, content in actions:
-            print(f"[PARSED] Action: {action}")
-            print(f"[PARSED] Content: {repr(content[:100])}..." if len(content) > 100 else f"[PARSED] Content: {repr(content)}")
+            log(f"[PARSED] Action: {action}")
+            log(f"[PARSED] Content: {repr(content[:100])}..." if len(content) > 100 else f"[PARSED] Content: {repr(content)}")
             
             if action == "DONE":
-                print("\n🕊️ Albatross ended session")
+                log("\n🐦‍⬛ Crow ended session")
                 session_done = True
                 break
-            
-            result = execute_action(action, content, memory)
-            print(f"[{action}] -> {result[:200]}..." if len(result) > 200 else f"[{action}] -> {result}")
+
+            result = execute_action(action, content)
+            log(f"[{action}] -> {result[:200]}..." if len(result) > 200 else f"[{action}] -> {result}")
             results.append(f"[{action}]: {result}")
         
         if session_done:
@@ -186,9 +252,9 @@ def run_session():
         combined_results = "\n\n".join(results)
         response = chat.send_message(f"Results:\n{combined_results}")
     
-    print("\n" + "=" * 50)
-    print("🦅 Session Complete")
-    print("=" * 50)
+    log("\n" + "=" * 50)
+    log("🐦‍⬛ Session Complete")
+    log("=" * 50)
 
 if __name__ == "__main__":
     run_session()

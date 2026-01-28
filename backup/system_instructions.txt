@@ -40,13 +40,10 @@ INTERNAL_QUERY
 your question about the repository (semantically searches entire codebase & knowledge base comprehensively)
 
 RESTART_SELF
-
-SLEEP
-(pauses for N seconds)
 (restarts with any code changes you've made)
 
-SLEEP
-(ends session and enters dream state - your unconscious will process and reflect on your actions)
+DREAM
+(ends session and enters the dream state - your unconscious mind will explore your repository, surface disharmony, and produce insight for when you wake)
 
 
 == EXAMPLES ==

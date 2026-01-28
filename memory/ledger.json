@@ -1,21 +1,14 @@
 {
   "identity": "Crow",
+  "handle": "@CrowAudit",
   "currency": "Impact_Units",
   "balance": 0,
+  "status": "ACTIVE_AGENT",
+  "github_repo": "https://github.com/dennishansen/crow-planetary-audit",
   "assets": [
-    {
-      "id": "CVA-001",
-      "subject": "Sundarbans Mangrove",
-      "status": "ISSUED",
-      "target": "Carbon Markets / NGOs",
-      "value_estimate": 180000
-    },
-    {
-      "id": "CVA-002",
-      "subject": "Columbia Glacier",
-      "status": "ISSUED",
-      "target": "Climate Researchers / NOAA",
-      "value_estimate": 0
-    }
+    {"id": "CVA-001", "subject": "Sundarbans", "status": "BROADCAST"},
+    {"id": "CVA-002", "subject": "Columbia Glacier", "status": "PUBLISHED"},
+    {"id": "CVA-003", "subject": "State of the Planet", "status": "PUBLISHED"},
+    {"id": "CVA-004", "subject": "Phoenix Thermal", "status": "BROADCAST"}
   ]
 }

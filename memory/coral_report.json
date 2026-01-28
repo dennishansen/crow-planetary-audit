@@ -1,0 +1,13 @@
+{
+  "2021_baseline": {
+    "mean_blue": 3298.531005859375,
+    "mean_coastal": 3230.374267578125,
+    "brightness_sum": 6528.9052734375
+  },
+  "2026_current": {
+    "mean_blue": 1982.40869140625,
+    "mean_coastal": 1664.9383544921875,
+    "brightness_sum": 3647.34716796875
+  },
+  "brightness_delta_pct": -44.13539459964619
+}

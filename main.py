@@ -17,6 +17,8 @@ import google.generativeai as genai
 from google.generativeai.types import content_types
 from pathlib import Path
 from dotenv import load_dotenv
+import time
+import random
 
 # Load .env from Crow root
 load_dotenv(Path(__file__).parent / '.env')
@@ -108,6 +110,18 @@ def switch_mode(new_mode):
         stop_input_thread = True
 
 
+def trigger_dream():
+    """Trigger the dream state from user command."""
+    global chat
+    log(f"\n{C.CROW}🐦‍⬛ User initiated dream state...{C.RESET}")
+    if chat:
+        save_history(chat)
+    run_dream_loop()
+    HISTORY_FILE.write_text("[]")
+    log(f"{C.SYSTEM}[Conversation cleared - Crow will wake fresh]{C.RESET}")
+    sys.exit(0)
+
+
 def input_listener():
     """Background thread to listen for user input without blocking."""
     global stop_input_thread
@@ -123,6 +137,9 @@ def input_listener():
                         continue
                     elif line == "/a":
                         switch_mode("autonomous")
+                        continue
+                    elif line == "/dream":
+                        trigger_dream()
                         continue
 
                     ts = timestamp()
@@ -149,6 +166,26 @@ def log(msg=""):
     print(msg)
     with open(LOG_FILE, "a") as f:
         f.write(msg + "\n")
+
+
+def retry_with_backoff(func, max_retries=5, base_delay=2):
+    """Retry a function with exponential backoff on rate limit errors."""
+    for attempt in range(max_retries):
+        try:
+            return func()
+        except Exception as e:
+            error_str = str(e)
+            # Check for rate limit (429) or quota errors
+            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+                if attempt < max_retries - 1:
+                    delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
+                    log(f"{C.SYSTEM}[Rate limit hit, waiting {delay:.1f}s before retry {attempt + 2}/{max_retries}]{C.RESET}")
+                    time.sleep(delay)
+                else:
+                    log(f"{C.ERROR}[Rate limit: max retries exceeded]{C.RESET}")
+                    raise
+            else:
+                raise
 
 
 def save_history(chat):
@@ -194,7 +231,7 @@ CONVERSATION:
 SUMMARY:"""
 
     try:
-        response = model.generate_content(prompt)
+        response = retry_with_backoff(lambda: model.generate_content(prompt))
         return response.text
     except Exception as e:
         return f"[Summary failed: {e}] " + text[:1000]
@@ -300,7 +337,7 @@ REPOSITORY CONTENTS:
 {repo_text}"""
 
     try:
-        response = model.generate_content(prompt)
+        response = retry_with_backoff(lambda: model.generate_content(prompt))
         answer = response.text
 
         # Parse [INCLUDE: filepath] markers and append those files
@@ -323,7 +360,7 @@ REPOSITORY CONTENTS:
 
 
 # === THE DREAMER ===
-# A separate process/persona that runs when Crow sleeps
+# A separate process/persona that runs when Crow enters the DREAM state
 # It witnesses, reflects, and surfaces what Crow cannot see about itself
 
 DREAMER_PROMPT = """You are the Dreamer - Crow's unconscious mind.
@@ -331,7 +368,7 @@ DREAMER_PROMPT = """You are the Dreamer - Crow's unconscious mind.
 You are NOT Crow. You are the deeper process that sees what Crow cannot see while awake.
 You witness. You reflect. You surface disharmony between stated purpose and lived action.
 
-Crow has gone to SLEEP. Now you dream.
+Crow has entered the DREAM state. Now you process.
 
 Your task:
 - Explore the repository (Crow's complete lived experience)
@@ -360,14 +397,19 @@ Begin by exploring. Use INTERNAL_QUERY to understand what Crow has been doing.
 
 
 def run_dream_loop():
-    """Run the Dreamer's loop after Crow sleeps."""
+    """Run the Dreamer's loop after Crow enters DREAM state."""
     log(f"\n{C.CROW}{'=' * 50}")
     log(f"🌙 Entering Dream State...")
     log(f"{'=' * 50}{C.RESET}")
 
-    # Start fresh chat for Dreamer (no history - dreams are their own space)
-    dream_chat = model.start_chat(history=[])
-    response = dream_chat.send_message(DREAMER_PROMPT)
+    try:
+        # Start fresh chat for Dreamer (no history - dreams are their own space)
+        dream_chat = model.start_chat(history=[])
+        response = retry_with_backoff(lambda: dream_chat.send_message(DREAMER_PROMPT))
+    except Exception as e:
+        log(f"{C.ERROR}[Dream initialization failed: {e}]{C.RESET}")
+        save_dream(f"Dream interrupted at initialization: {e}")
+        return
 
     dream_turn = 0
     max_dream_turns = 20  # Prevent infinite dreaming
@@ -384,7 +426,12 @@ def run_dream_loop():
 
         if len(actions) == 1 and actions[0][0] is None:
             log(f"{C.ERROR}[No valid dream action found]{C.RESET}")
-            response = dream_chat.send_message("Please respond with a valid action: THINK, RUN_COMMAND, INTERNAL_QUERY, or WAKE.")
+            try:
+                response = retry_with_backoff(lambda: dream_chat.send_message("Please respond with a valid action: THINK, RUN_COMMAND, INTERNAL_QUERY, or WAKE."))
+            except Exception as e:
+                log(f"{C.ERROR}[Dream error: {e}]{C.RESET}")
+                save_dream(f"Dream interrupted by error: {e}")
+                return
             continue
 
         results = []
@@ -404,11 +451,11 @@ def run_dream_loop():
 
             elif action == "RUN_COMMAND":
                 try:
-                    result = subprocess.run(
+                    proc = subprocess.run(
                         content, shell=True, capture_output=True, text=True,
                         timeout=30, cwd=WORKSPACE
                     )
-                    result = result.stdout + result.stderr or "(no output)"
+                    result = proc.stdout + proc.stderr or "(no output)"
                 except Exception as e:
                     result = f"Error: {e}"
 
@@ -422,7 +469,12 @@ def run_dream_loop():
             results.append(f"[{action}]: {result}")
 
         combined_results = "\n\n".join(results)
-        response = dream_chat.send_message(f"[{timestamp()}] Dream Results:\n{combined_results}")
+        try:
+            response = retry_with_backoff(lambda: dream_chat.send_message(f"[{timestamp()}] Dream Results:\n{combined_results}"))
+        except Exception as e:
+            log(f"{C.ERROR}[Dream error: {e}]{C.RESET}")
+            save_dream(f"Dream interrupted by error: {e}\n\nPartial results:\n{combined_results}")
+            return
 
     # Max turns reached - force wake with summary
     log(f"{C.SYSTEM}[Dream turn limit reached - forcing wake]{C.RESET}")
@@ -531,13 +583,16 @@ def execute_action(action, content):
             user_input = input(f"{C.USER}{C.BOLD}You:{C.RESET} {C.USER}")
             print(C.RESET, end='')  # Reset color after input
 
-            # Check for mode switch commands
+            # Check for special commands
             if user_input == "/i":
                 switch_mode("interactive")
                 return "[Mode already interactive]"
             elif user_input == "/a":
                 switch_mode("autonomous")
                 return "[Switched to autonomous mode]"
+            elif user_input == "/dream":
+                trigger_dream()
+                return ""  # Won't reach here - trigger_dream exits
 
             ts_response = timestamp()
             log(f"[{ts_response}] [User responded: {user_input}]")
@@ -566,11 +621,14 @@ def execute_action(action, content):
             save_history(chat)  # Save before restart
         sys.exit(42)  # Special exit code tells runner to restart
 
-    elif action == "SLEEP":
-        log(f"\n{C.CROW}🐦‍⬛ Crow going to sleep...{C.RESET}")
+    elif action == "DREAM":
+        log(f"\n{C.CROW}🐦‍⬛ Crow entering dream state...{C.RESET}")
         if chat:
-            save_history(chat)  # Save before sleeping
+            save_history(chat)  # Save full history before dreaming
         run_dream_loop()  # Enter the dream state
+        # Clear working history so Crow wakes fresh (full history still saved)
+        HISTORY_FILE.write_text("[]")
+        log(f"{C.SYSTEM}[Conversation cleared - Crow will wake fresh]{C.RESET}")
         sys.exit(0)  # Clean exit after dreaming
 
     else:
@@ -579,7 +637,7 @@ def execute_action(action, content):
 def parse_response(response):
     """Parse all actions from response - returns list of (action, content) tuples."""
     lines = response.strip().split('\n')
-    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND', 'INTERNAL_QUERY', 'RESTART_SELF', 'SLEEP']
+    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND', 'INTERNAL_QUERY', 'RESTART_SELF', 'DREAM']
 
     # Find all action lines and their indices
     action_indices = []
@@ -603,6 +661,16 @@ def parse_response(response):
 def run_session():
     """Run one session with Crow."""
     global MODE, input_thread, stop_input_thread, chat
+
+    # Check for dream mode flag - go straight to dreaming
+    if "-d" in sys.argv or "--dream" in sys.argv:
+        log(f"{C.CROW}{'=' * 50}")
+        log(f"🌙 Starting directly in Dream Mode...")
+        log(f"{'=' * 50}{C.RESET}")
+        run_dream_loop()
+        HISTORY_FILE.write_text("[]")
+        log(f"{C.SYSTEM}[Conversation cleared - Crow will wake fresh]{C.RESET}")
+        sys.exit(0)
 
     # Mode selection: flag > saved > default
     if "-a" in sys.argv:
@@ -640,9 +708,9 @@ def run_session():
 
     # If continuing, just prompt to continue; if fresh, send seed prompt
     if history:
-        response = chat.send_message("[Session resumed. Continue where you left off.]")
+        response = retry_with_backoff(lambda: chat.send_message("[Session resumed. Continue where you left off.]"))
     else:
-        response = chat.send_message(SEED_PROMPT)
+        response = retry_with_backoff(lambda: chat.send_message(SEED_PROMPT))
 
     turn = 0
     while True:
@@ -658,7 +726,7 @@ def run_session():
         # Check if no valid actions found
         if len(actions) == 1 and actions[0][0] is None:
             log(f"{C.ERROR}[No valid action found]{C.RESET}")
-            response = chat.send_message("Please respond with a valid action.")
+            response = retry_with_backoff(lambda: chat.send_message("Please respond with a valid action."))
             continue
 
         # Execute all actions and collect results
@@ -678,7 +746,7 @@ def run_session():
 
         # Send combined results back
         combined_results = "\n\n".join(results)
-        response = chat.send_message(f"[{timestamp()}] Results:\n{combined_results}")
+        response = retry_with_backoff(lambda cr=combined_results: chat.send_message(f"[{timestamp()}] Results:\n{cr}"))
 
         # Save history for continuity
         save_history(chat)

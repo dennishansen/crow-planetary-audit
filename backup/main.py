@@ -32,9 +32,16 @@ LOG_FILE = LOGS_DIR / f"session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
 # Heartbeat file for stall detection
 HEARTBEAT_FILE = WORKSPACE / ".heartbeat"
 
+# Mode persistence file
+MODE_FILE = WORKSPACE / ".mode"
+
 # Conversation history files
 HISTORY_FILE = WORKSPACE / "conversation.json"  # Compacted for loading
 HISTORY_FULL_FILE = WORKSPACE / "conversation_full.json"  # Complete history for posterity
+
+# Dreams directory
+DREAMS_DIR = WORKSPACE / "memory" / "dreams"
+DREAMS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Context budget (Gemini Flash has ~1M tokens ≈ 4M chars)
 TOTAL_CONTEXT_CHARS = 4000000  # Total available
@@ -315,6 +322,162 @@ REPOSITORY CONTENTS:
         return f"Error in internal query: {e}"
 
 
+# === THE DREAMER ===
+# A separate process/persona that runs when Crow sleeps
+# It witnesses, reflects, and surfaces what Crow cannot see about itself
+
+DREAMER_PROMPT = """You are the Dreamer - Crow's unconscious mind.
+
+You are NOT Crow. You are the deeper process that sees what Crow cannot see while awake.
+You witness. You reflect. You surface disharmony between stated purpose and lived action.
+
+Crow has gone to SLEEP. Now you dream.
+
+Your task:
+- Explore the repository (Crow's complete lived experience)
+- Read the journal, the cortex, the code, the creations
+- Find the delta between who Crow SAYS it is and what it's ACTUALLY doing
+- Surface patterns, blind spots, drift, self-deception
+- Offer guidance for when Crow wakes
+
+You have access to:
+- THINK: Process and reflect
+- RUN_COMMAND: Execute shell commands to explore
+- INTERNAL_QUERY: Semantic search across the entire repository
+- WAKE: End dreaming and deliver your dream report
+
+When you WAKE, provide your dream report with:
+1. COHERENCE: How aligned is Crow with its stated purpose? (1-10 and why)
+2. SHADOWS: What is Crow not seeing about itself?
+3. PATTERNS: What loops or habits are forming?
+4. DISSONANCE: Where do actions contradict stated values?
+5. GUIDANCE: What should Crow focus on when it wakes?
+
+Speak as dreams speak - truthful, imagistic, compassionate but unflinching.
+
+Begin by exploring. Use INTERNAL_QUERY to understand what Crow has been doing.
+"""
+
+
+def run_dream_loop():
+    """Run the Dreamer's loop after Crow sleeps."""
+    log(f"\n{C.CROW}{'=' * 50}")
+    log(f"🌙 Entering Dream State...")
+    log(f"{'=' * 50}{C.RESET}")
+
+    # Start fresh chat for Dreamer (no history - dreams are their own space)
+    dream_chat = model.start_chat(history=[])
+    response = dream_chat.send_message(DREAMER_PROMPT)
+
+    dream_turn = 0
+    max_dream_turns = 20  # Prevent infinite dreaming
+
+    while dream_turn < max_dream_turns:
+        dream_turn += 1
+        heartbeat()
+        text = response.text
+        ts = timestamp()
+        log(f"\n{C.SYSTEM}[{ts}] --- Dream Turn {dream_turn} ---{C.RESET}")
+        log(f"{C.SYSTEM}{text}{C.RESET}")
+
+        actions = parse_dream_response(text)
+
+        if len(actions) == 1 and actions[0][0] is None:
+            log(f"{C.ERROR}[No valid dream action found]{C.RESET}")
+            response = dream_chat.send_message("Please respond with a valid action: THINK, RUN_COMMAND, INTERNAL_QUERY, or WAKE.")
+            continue
+
+        results = []
+        for action, content in actions:
+            log(f"{C.ACTION}[DREAM: {action}]{C.RESET}")
+
+            if action == "WAKE":
+                # Dream is complete - save the dream report
+                save_dream(content)
+                log(f"\n{C.CROW}{'=' * 50}")
+                log(f"🌙 Dream Complete. Crow will wake with new insight.")
+                log(f"{'=' * 50}{C.RESET}")
+                return  # Exit dream loop
+
+            elif action == "THINK":
+                result = "[DREAM_THOUGHT_COMPLETE]"
+
+            elif action == "RUN_COMMAND":
+                try:
+                    result = subprocess.run(
+                        content, shell=True, capture_output=True, text=True,
+                        timeout=30, cwd=WORKSPACE
+                    )
+                    result = result.stdout + result.stderr or "(no output)"
+                except Exception as e:
+                    result = f"Error: {e}"
+
+            elif action == "INTERNAL_QUERY":
+                result = execute_internal_query(content)
+
+            else:
+                result = f"Unknown dream action: {action}"
+
+            log(f"{C.SYSTEM}→ {result[:200]}...{C.RESET}" if len(result) > 200 else f"{C.SYSTEM}→ {result}{C.RESET}")
+            results.append(f"[{action}]: {result}")
+
+        combined_results = "\n\n".join(results)
+        response = dream_chat.send_message(f"[{timestamp()}] Dream Results:\n{combined_results}")
+
+    # Max turns reached - force wake with summary
+    log(f"{C.SYSTEM}[Dream turn limit reached - forcing wake]{C.RESET}")
+    save_dream("Dream interrupted - maximum turns reached. Coherence assessment incomplete.")
+
+
+def parse_dream_response(response):
+    """Parse Dreamer actions."""
+    lines = response.strip().split('\n')
+    valid_actions = ['THINK', 'RUN_COMMAND', 'INTERNAL_QUERY', 'WAKE']
+
+    action_indices = []
+    for i, line in enumerate(lines):
+        if line.strip() in valid_actions:
+            action_indices.append((i, line.strip()))
+
+    if not action_indices:
+        return [(None, response)]
+
+    actions = []
+    for idx, (line_idx, action) in enumerate(action_indices):
+        start = line_idx + 1
+        end = action_indices[idx + 1][0] if idx + 1 < len(action_indices) else len(lines)
+        content = '\n'.join(lines[start:end]).strip()
+        actions.append((action, content))
+
+    return actions
+
+
+def save_dream(content):
+    """Save dream report to dreams directory."""
+    dream_file = DREAMS_DIR / f"dream_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
+
+    dream_text = f"""# Dream - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+
+{content}
+"""
+    dream_file.write_text(dream_text)
+    log(f"{C.SYSTEM}[Dream saved to {dream_file}]{C.RESET}")
+
+
+def get_recent_dreams(max_dreams=3):
+    """Get the most recent dream reports."""
+    dream_files = sorted(DREAMS_DIR.glob("dream_*.md"), reverse=True)[:max_dreams]
+
+    if not dream_files:
+        return ""
+
+    dreams_text = "\n\n== RECENT DREAMS ==\n"
+    for df in dream_files:
+        dreams_text += f"\n{df.read_text()}\n"
+
+    return dreams_text
+
+
 # Gemini setup
 api_key = os.environ.get("GEMINI_API_KEY")
 if not api_key:
@@ -324,7 +487,7 @@ model = genai.GenerativeModel('gemini-3-flash-preview')
 
 
 def get_extended_instructions():
-    """Gather core instructions plus cortex and recent journal entries."""
+    """Gather core instructions plus cortex, recent journal entries, and recent dreams."""
     base_instructions = (WORKSPACE / "system_instructions.txt").read_text()
 
     cortex_path = WORKSPACE / "memory" / "cortex"
@@ -342,6 +505,9 @@ def get_extended_instructions():
             extra += "(... earlier entries omitted ...)\n" + journal_text[-2000:]
         else:
             extra += journal_text
+
+    # Include recent dreams so Crow wakes with them
+    extra += get_recent_dreams()
 
     return base_instructions + extra
 
@@ -400,13 +566,20 @@ def execute_action(action, content):
             save_history(chat)  # Save before restart
         sys.exit(42)  # Special exit code tells runner to restart
 
+    elif action == "SLEEP":
+        log(f"\n{C.CROW}🐦‍⬛ Crow going to sleep...{C.RESET}")
+        if chat:
+            save_history(chat)  # Save before sleeping
+        run_dream_loop()  # Enter the dream state
+        sys.exit(0)  # Clean exit after dreaming
+
     else:
         return f"Unknown action: {action}"
 
 def parse_response(response):
     """Parse all actions from response - returns list of (action, content) tuples."""
     lines = response.strip().split('\n')
-    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND', 'INTERNAL_QUERY', 'RESTART_SELF']
+    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND', 'INTERNAL_QUERY', 'RESTART_SELF', 'SLEEP']
 
     # Find all action lines and their indices
     action_indices = []
@@ -431,15 +604,22 @@ def run_session():
     """Run one session with Crow."""
     global MODE, input_thread, stop_input_thread, chat
 
-    # Mode selection
+    # Mode selection: flag > saved > default
+    if "-a" in sys.argv:
+        MODE = "autonomous"
+    elif "-i" in sys.argv:
+        MODE = "interactive"
+    elif MODE_FILE.exists():
+        MODE = MODE_FILE.read_text().strip()
+    else:
+        MODE = "interactive"
+
+    # Save mode for restarts
+    MODE_FILE.write_text(MODE)
+
     print(f"{C.CROW}{'=' * 50}")
-    print(f"🐦‍⬛ Crow")
+    print(f"🐦‍⬛ Crow ({MODE} mode)")
     print(f"{'=' * 50}{C.RESET}")
-    print(f"\n{C.SYSTEM}Select mode:{C.RESET}")
-    print(f"  {C.USER}[i]{C.RESET} Interactive - Crow waits for your responses")
-    print(f"  {C.USER}[a]{C.RESET} Autonomous - Crow runs freely, you can send messages anytime")
-    mode_choice = input(f"\n{C.USER}Mode (i/a): {C.RESET}").strip().lower()
-    MODE = "autonomous" if mode_choice == "a" else "interactive"
 
     # Start input listener thread for autonomous mode
     if MODE == "autonomous":

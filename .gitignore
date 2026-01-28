@@ -1,0 +1,21 @@
+# Secrets - NEVER commit
+.env
+.env.*
+*.env
+
+# Logs contain stdout which may include secrets
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+venv/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+
+# OS
+.DS_Store

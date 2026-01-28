@@ -77,7 +77,7 @@ def run_crow():
         HEARTBEAT_FILE.unlink()
 
     proc = subprocess.Popen(
-        [sys.executable, WORKSPACE / "main.py"],
+        [sys.executable, WORKSPACE / "main.py"] + sys.argv[1:],
         cwd=WORKSPACE
     )
 

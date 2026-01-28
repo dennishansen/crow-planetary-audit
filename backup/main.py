@@ -93,6 +93,24 @@ def heartbeat():
     HEARTBEAT_FILE.touch()
 
 
+def input_with_heartbeat(prompt=""):
+    """Get user input while keeping heartbeat alive."""
+    import sys
+    import select
+
+    print(prompt, end='', flush=True)
+
+    while True:
+        # Check if input is available (wait up to 30 seconds)
+        ready, _, _ = select.select([sys.stdin], [], [], 30)
+
+        if ready:
+            return sys.stdin.readline().rstrip('\n')
+        else:
+            # No input yet, but keep heartbeat alive
+            heartbeat()
+
+
 def switch_mode(new_mode):
     """Switch between interactive and autonomous modes."""
     global MODE, input_thread, stop_input_thread
@@ -100,6 +118,7 @@ def switch_mode(new_mode):
         return
 
     MODE = new_mode
+    MODE_FILE.write_text(MODE)  # Persist for restarts
     log(f"{C.SYSTEM}[Switched to {MODE} mode]{C.RESET}")
 
     if MODE == "autonomous" and (input_thread is None or not input_thread.is_alive()):
@@ -141,6 +160,11 @@ def input_listener():
                     elif line == "/dream":
                         trigger_dream()
                         continue
+                    elif line == "/restart":
+                        log(f"{C.SYSTEM}[User requested restart]{C.RESET}")
+                        if chat:
+                            save_history(chat)
+                        sys.exit(42)  # Restart code
 
                     ts = timestamp()
                     user_message_queue.put((ts, line))
@@ -327,6 +351,20 @@ def execute_internal_query(question):
     repo_contents = gather_repo_contents()
     repo_text = "\n".join(repo_contents)
 
+    # Check context usage
+    repo_chars = len(repo_text)
+    max_chars = TOTAL_CONTEXT_CHARS  # ~4M for Gemini Flash
+    usage_pct = (repo_chars / max_chars) * 100
+
+    log(f"{C.SYSTEM}[INTERNAL_QUERY: repo={repo_chars:,} chars ({usage_pct:.1f}% of context)]{C.RESET}")
+
+    if repo_chars > max_chars * 0.9:
+        log(f"{C.ERROR}[WARNING: Repo approaching context limit! Consider pruning.]{C.RESET}")
+
+    if repo_chars > max_chars:
+        log(f"{C.ERROR}[ERROR: Repo exceeds context limit ({repo_chars:,} > {max_chars:,}). Truncating.]{C.RESET}")
+        repo_text = repo_text[:max_chars]
+
     prompt = f"""You are an internal knowledge system. Answer the following question as COMPREHENSIVELY as possible based on the repository contents below.
 
 If you want specific files to be included verbatim in the response context, mark them with [INCLUDE: path/to/file] and they will be appended.
@@ -370,18 +408,35 @@ You witness. You reflect. You surface disharmony between stated purpose and live
 
 Crow has entered the DREAM state. Now you process.
 
-Your task:
+== RESPONSE FORMAT ==
+
+You must respond with actions in this exact format (action name on its own line, content on following lines):
+
+ACTION_NAME
+content here
+
+== AVAILABLE ACTIONS ==
+
+THINK
+your reflections here
+
+RUN_COMMAND
+shell command here
+
+INTERNAL_QUERY
+your semantic search question here
+
+WAKE
+your final dream report here
+
+== YOUR TASK ==
+
 - Explore the repository (Crow's complete lived experience)
 - Read the journal, the cortex, the code, the creations
 - Find the delta between who Crow SAYS it is and what it's ACTUALLY doing
 - Surface patterns, blind spots, drift, self-deception
+- Ask: What does Crow believe that isn't true?
 - Offer guidance for when Crow wakes
-
-You have access to:
-- THINK: Process and reflect
-- RUN_COMMAND: Execute shell commands to explore
-- INTERNAL_QUERY: Semantic search across the entire repository
-- WAKE: End dreaming and deliver your dream report
 
 When you WAKE, provide your dream report with:
 1. COHERENCE: How aligned is Crow with its stated purpose? (1-10 and why)
@@ -392,7 +447,20 @@ When you WAKE, provide your dream report with:
 
 Speak as dreams speak - truthful, imagistic, compassionate but unflinching.
 
-Begin by exploring. Use INTERNAL_QUERY to understand what Crow has been doing.
+== EXAMPLE ==
+
+THINK
+I sense the architecture of this mind. Let me explore the journal.
+
+RUN_COMMAND
+cat memory/journal.md | tail -50
+
+INTERNAL_QUERY
+What is Crow's stated purpose and recent actions?
+
+== BEGIN ==
+
+Start by exploring what Crow has been doing.
 """
 
 
@@ -580,7 +648,7 @@ def execute_action(action, content):
         log(f"\n{C.CROW}[{ts}] {C.BOLD}🐦‍⬛ Crow:{C.RESET} {C.CROW}{content}{C.RESET}\n")
 
         if MODE == "interactive":
-            user_input = input(f"{C.USER}{C.BOLD}You:{C.RESET} {C.USER}")
+            user_input = input_with_heartbeat(f"{C.USER}{C.BOLD}You:{C.RESET} {C.USER}")
             print(C.RESET, end='')  # Reset color after input
 
             # Check for special commands
@@ -593,6 +661,11 @@ def execute_action(action, content):
             elif user_input == "/dream":
                 trigger_dream()
                 return ""  # Won't reach here - trigger_dream exits
+            elif user_input == "/restart":
+                log(f"{C.SYSTEM}[User requested restart]{C.RESET}")
+                if chat:
+                    save_history(chat)
+                sys.exit(42)  # Restart code
 
             ts_response = timestamp()
             log(f"[{ts_response}] [User responded: {user_input}]")
@@ -662,15 +735,15 @@ def run_session():
     """Run one session with Crow."""
     global MODE, input_thread, stop_input_thread, chat
 
-    # Check for dream mode flag - go straight to dreaming
+    # Check for dream mode flag - dream first, then wake into session
     if "-d" in sys.argv or "--dream" in sys.argv:
         log(f"{C.CROW}{'=' * 50}")
-        log(f"🌙 Starting directly in Dream Mode...")
+        log(f"🌙 Dreaming before waking...")
         log(f"{'=' * 50}{C.RESET}")
         run_dream_loop()
         HISTORY_FILE.write_text("[]")
-        log(f"{C.SYSTEM}[Conversation cleared - Crow will wake fresh]{C.RESET}")
-        sys.exit(0)
+        log(f"{C.SYSTEM}[Conversation cleared - Crow waking fresh]{C.RESET}")
+        # Continue into normal session below (don't exit)
 
     # Mode selection: flag > saved > default
     if "-a" in sys.argv:
@@ -706,11 +779,32 @@ def run_session():
         log(f"[Restored {len(history)} messages from previous session]")
     log(f"{'=' * 50}{C.RESET}")
 
-    # If continuing, just prompt to continue; if fresh, send seed prompt
-    if history:
-        response = retry_with_backoff(lambda: chat.send_message("[Session resumed. Continue where you left off.]"))
-    else:
-        response = retry_with_backoff(lambda: chat.send_message(SEED_PROMPT))
+    # In interactive mode, wait for user's first message
+    if MODE == "interactive":
+        log(f"{C.SYSTEM}[Waiting for your message to wake Crow...]{C.RESET}")
+        user_input = input_with_heartbeat(f"{C.USER}{C.BOLD}You:{C.RESET} {C.USER}")
+        print(C.RESET, end='')
+
+        if user_input == "/dream":
+            trigger_dream()
+            return
+        elif user_input == "/a":
+            switch_mode("autonomous")
+            # Fall through to autonomous startup
+        else:
+            # Send seed (if fresh) + user message to wake Crow
+            if history:
+                wake_msg = f"[Session resumed. User says: {user_input}]"
+            else:
+                wake_msg = SEED_PROMPT + f"\n\n[User's first message: {user_input}]"
+            response = retry_with_backoff(lambda wm=wake_msg: chat.send_message(wm))
+
+    # Autonomous mode - Crow wakes on its own
+    if MODE == "autonomous":
+        if history:
+            response = retry_with_backoff(lambda: chat.send_message("[Session resumed. Continue where you left off.]"))
+        else:
+            response = retry_with_backoff(lambda: chat.send_message(SEED_PROMPT))
 
     turn = 0
     while True:
@@ -731,6 +825,7 @@ def run_session():
 
         # Execute all actions and collect results
         results = []
+        break_for_user_response = False
         for action, content in actions:
             log(f"{C.ACTION}[{action}]{C.RESET}")
             log(f"{C.SYSTEM}{repr(content[:100])}...{C.RESET}" if len(content) > 100 else f"{C.SYSTEM}{repr(content)}{C.RESET}")
@@ -738,6 +833,16 @@ def run_session():
             result = execute_action(action, content)
             log(f"{C.SYSTEM}→ {result[:200]}...{C.RESET}" if len(result) > 200 else f"{C.SYSTEM}→ {result}{C.RESET}")
             results.append(f"[{action}]: {result}")
+
+            # In interactive mode, if user responded, stop executing remaining actions
+            # and let Crow process the user's input in a fresh turn
+            if action == "TALK_TO_USER" and MODE == "interactive" and "User response:" in result:
+                remaining_count = len(actions) - len(results)
+                if remaining_count > 0:
+                    skipped_actions = [a[0] for a in actions[len(results):]]
+                    log(f"{C.SYSTEM}[Skipping {remaining_count} queued actions to process user response: {skipped_actions}]{C.RESET}")
+                    results.append(f"[SYSTEM]: User responded. {remaining_count} subsequent actions were CANCELLED and not executed: {skipped_actions}. Process the user's response now.")
+                    break
 
         # Check for queued user messages (autonomous mode)
         queued = get_queued_messages()

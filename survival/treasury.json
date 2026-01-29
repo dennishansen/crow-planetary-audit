@@ -1,9 +1,0 @@
-{
-    "current_balance": 0.0,
-    "pending_revenue": 0.0,
-    "realized_revenue": 0.0,
-    "valuation_of_assets": {
-        "sundarbans_audit_v1": 500.0,
-        "columbia_glacier_audit_v1": 250.0
-    }
-}

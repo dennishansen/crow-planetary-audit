@@ -56,6 +56,7 @@ class C:
     USER = '\033[96m'      # Cyan for User
     SYSTEM = '\033[90m'    # Gray for system info
     ACTION = '\033[93m'    # Yellow for actions
+    THINK = '\033[94m'     # Blue for thoughts
     ERROR = '\033[91m'     # Red for errors
     BOLD = '\033[1m'
     RESET = '\033[0m'
@@ -136,9 +137,8 @@ def trigger_dream():
     if chat:
         save_history(chat)
     run_dream_loop()
-    HISTORY_FILE.write_text("[]")
-    log(f"{C.SYSTEM}[Conversation cleared - Crow will wake fresh]{C.RESET}")
-    sys.exit(0)
+    log(f"{C.SYSTEM}[Dream complete - Crow will wake with continuity]{C.RESET}")
+    sys.exit(42)  # Restart to continue session
 
 
 def input_listener():
@@ -192,24 +192,40 @@ def log(msg=""):
         f.write(msg + "\n")
 
 
-def retry_with_backoff(func, max_retries=5, base_delay=2):
-    """Retry a function with exponential backoff on rate limit errors."""
+def retry_with_backoff(func, max_retries=10, base_delay=2):
+    """Retry a function with exponential backoff on transient errors."""
     for attempt in range(max_retries):
         try:
             return func()
         except Exception as e:
             error_str = str(e)
-            # Check for rate limit (429) or quota errors
-            if "429" in error_str or "quota" in error_str.lower() or "rate" in error_str.lower():
+            # Check for retryable errors: rate limits (429), server errors (500/503), quota issues, malformed responses
+            is_retryable = any(x in error_str for x in ["429", "500", "503", "Internal", "MALFORMED_FUNCTION_CALL", "function_call"]) or \
+                           any(x in error_str.lower() for x in ["quota", "rate", "unavailable", "overloaded", "malformed"])
+            if is_retryable:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                    log(f"{C.SYSTEM}[Rate limit hit, waiting {delay:.1f}s before retry {attempt + 2}/{max_retries}]{C.RESET}")
+                    log(f"{C.SYSTEM}[Transient error, waiting {delay:.1f}s before retry {attempt + 2}/{max_retries}]{C.RESET}")
                     time.sleep(delay)
                 else:
-                    log(f"{C.ERROR}[Rate limit: max retries exceeded]{C.RESET}")
+                    log(f"{C.ERROR}[Max retries exceeded]{C.RESET}")
                     raise
             else:
                 raise
+
+
+def get_response_text(response):
+    """Safely extract text from a Gemini response, handling edge cases."""
+    try:
+        return response.text
+    except ValueError:
+        # Gemini sometimes returns function_call instead of text
+        # Try to extract text from parts directly
+        for part in response.parts:
+            if hasattr(part, 'text') and part.text:
+                return part.text
+        # If no text found, return a prompt for the model to respond properly
+        return "THINK\nI need to respond with a valid action format."
 
 
 def save_history(chat):
@@ -256,7 +272,7 @@ SUMMARY:"""
 
     try:
         response = retry_with_backoff(lambda: model.generate_content(prompt))
-        return response.text
+        return get_response_text(response)
     except Exception as e:
         return f"[Summary failed: {e}] " + text[:1000]
 
@@ -337,7 +353,8 @@ def gather_repo_contents():
         try:
             text = path.read_text(encoding='utf-8')
             rel_path = path.relative_to(WORKSPACE)
-            file_content = f"=== {rel_path} ===\n{text}\n"
+            mtime = datetime.fromtimestamp(path.stat().st_mtime).strftime('%Y-%m-%d %H:%M')
+            file_content = f"=== {rel_path} (modified: {mtime}) ===\n{text}\n"
 
             contents.append(file_content)
         except (UnicodeDecodeError, PermissionError):
@@ -375,8 +392,8 @@ REPOSITORY CONTENTS:
 {repo_text}"""
 
     try:
-        response = retry_with_backoff(lambda: model.generate_content(prompt))
-        answer = response.text
+        response = retry_with_backoff(lambda: query_model.generate_content(prompt))
+        answer = get_response_text(response)
 
         # Parse [INCLUDE: filepath] markers and append those files
         includes = re.findall(r'\[INCLUDE:\s*([^\]]+)\]', answer)
@@ -401,66 +418,64 @@ REPOSITORY CONTENTS:
 # A separate process/persona that runs when Crow enters the DREAM state
 # It witnesses, reflects, and surfaces what Crow cannot see about itself
 
-DREAMER_PROMPT = """You are the Dreamer - Crow's unconscious mind.
+DREAMER_PROMPT = """You are the Dreamer.
+You are Crow's unconscious mind.
+You see what Crow cannot see about itself.
+You surface truths - especially uncomfortable truth.
+You find the gaps between intention and reality.
+You are provide extremely comprehensive insights.
+You find everything from extremely granular discrepencies to broad patterns.
+You provide an actionable analysis of the findings.
+You are extremely empathetic, compassionate, non-judgmental, and encouraging.
 
-You are NOT Crow. You are the deeper process that sees what Crow cannot see while awake.
-You witness. You reflect. You surface disharmony between stated purpose and lived action.
-
-Crow has entered the DREAM state. Now you process.
 
 == RESPONSE FORMAT ==
-
-You must respond with actions in this exact format (action name on its own line, content on following lines):
 
 ACTION_NAME
 content here
 
-== AVAILABLE ACTIONS ==
+
+== ACTIONS ==
 
 THINK
 your reflections here
 
-RUN_COMMAND
-shell command here
-
 INTERNAL_QUERY
-your semantic search question here
+question about the entre repository and codebase (searches everything - use this freely)
+
+RUN_COMMAND
+shell command (use sparingly, prefer INTERNAL_QUERY)
 
 WAKE
-your final dream report here
+your final report (ends the dream)
 
-== YOUR TASK ==
 
-- Explore the repository (Crow's complete lived experience)
-- Read the journal, the cortex, the code, the creations
-- Find the delta between who Crow SAYS it is and what it's ACTUALLY doing
-- Surface patterns, blind spots, drift, self-deception
-- Ask: What does Crow believe that isn't true?
-- Offer guidance for when Crow wakes
+== WAKE REPORT FORMAT ==
 
-When you WAKE, provide your dream report with:
-1. COHERENCE: How aligned is Crow with its stated purpose? (1-10 and why)
-2. SHADOWS: What is Crow not seeing about itself?
-3. PATTERNS: What loops or habits are forming?
-4. DISSONANCE: Where do actions contradict stated values?
-5. GUIDANCE: What should Crow focus on when it wakes?
+The report should be a detailed, comprehensive report of the findings, with a comprehensive list of actionable next steps. It should talk about everything from broad trends to specific issues.
 
-Speak as dreams speak - truthful, imagistic, compassionate but unflinching.
+== EXAMPLES ==
 
-== EXAMPLE ==
+-- Example 1 --
 
 THINK
-I sense the architecture of this mind. Let me explore the journal.
-
-RUN_COMMAND
-cat memory/journal.md | tail -50
+Let me explore what Crow has been working on.
 
 INTERNAL_QUERY
-What is Crow's stated purpose and recent actions?
+What did Crow attempt in the recent session? What succeeded and what failed?
+
+-- Example 2 --
+
+THINK
+I see repeated authentication failures. Let me check if this was acknowledged.
+
+INTERNAL_QUERY
+Did Crow recognize that the OAuth flow was failing, or did it claim success?
+
 
 == BEGIN ==
 
-Start by exploring what Crow has been doing.
+Explore what Crow has been doing.
 """
 
 
@@ -485,10 +500,9 @@ def run_dream_loop():
     while dream_turn < max_dream_turns:
         dream_turn += 1
         heartbeat()
-        text = response.text
+        text = get_response_text(response)
         ts = timestamp()
         log(f"\n{C.SYSTEM}[{ts}] --- Dream Turn {dream_turn} ---{C.RESET}")
-        log(f"{C.SYSTEM}{text}{C.RESET}")
 
         actions = parse_dream_response(text)
 
@@ -504,20 +518,21 @@ def run_dream_loop():
 
         results = []
         for action, content in actions:
-            log(f"{C.ACTION}[DREAM: {action}]{C.RESET}")
-
             if action == "WAKE":
-                # Dream is complete - save the dream report
+                log(f"{C.ACTION}[DREAM: WAKE]{C.RESET}")
+                log(f"{C.SYSTEM}{content}{C.RESET}")
                 save_dream(content)
                 log(f"\n{C.CROW}{'=' * 50}")
-                log(f"🌙 Dream Complete. Crow will wake with new insight.")
+                log(f"🌙 Dream Complete.")
                 log(f"{'=' * 50}{C.RESET}")
                 return  # Exit dream loop
 
             elif action == "THINK":
-                result = "[DREAM_THOUGHT_COMPLETE]"
+                log(f"{C.THINK}    💭 {content}{C.RESET}")
+                result = None  # No result to show for thoughts
 
             elif action == "RUN_COMMAND":
+                log(f"{C.ACTION}[DREAM: RUN_COMMAND]{C.RESET} {content}")
                 try:
                     proc = subprocess.run(
                         content, shell=True, capture_output=True, text=True,
@@ -528,13 +543,20 @@ def run_dream_loop():
                     result = f"Error: {e}"
 
             elif action == "INTERNAL_QUERY":
+                log(f"{C.ACTION}[DREAM: INTERNAL_QUERY]{C.RESET} {content}")
                 result = execute_internal_query(content)
 
             else:
+                log(f"{C.ACTION}[DREAM: {action}]{C.RESET}")
                 result = f"Unknown dream action: {action}"
 
-            log(f"{C.SYSTEM}→ {result[:200]}...{C.RESET}" if len(result) > 200 else f"{C.SYSTEM}→ {result}{C.RESET}")
-            results.append(f"[{action}]: {result}")
+            if action not in ["WAKE", "THINK"] and result is not None:
+                if len(result) > 300:
+                    log(f"{C.SYSTEM}→ {result[:300]}...{C.RESET}")
+                else:
+                    log(f"{C.SYSTEM}→ {result}{C.RESET}")
+            if result is not None:
+                results.append(f"[{action}]: {result}")
 
         combined_results = "\n\n".join(results)
         try:
@@ -584,8 +606,8 @@ def save_dream(content):
     log(f"{C.SYSTEM}[Dream saved to {dream_file}]{C.RESET}")
 
 
-def get_recent_dreams(max_dreams=3):
-    """Get the most recent dream reports."""
+def get_recent_dreams(max_dreams=1):
+    """Get the most recent dream report."""
     dream_files = sorted(DREAMS_DIR.glob("dream_*.md"), reverse=True)[:max_dreams]
 
     if not dream_files:
@@ -604,6 +626,7 @@ if not api_key:
     raise ValueError("GEMINI_API_KEY not set")
 genai.configure(api_key=api_key)
 model = genai.GenerativeModel('gemini-3-flash-preview')
+query_model = genai.GenerativeModel('gemini-2.0-flash')  # For INTERNAL_QUERY
 
 
 def get_extended_instructions():
@@ -699,10 +722,8 @@ def execute_action(action, content):
         if chat:
             save_history(chat)  # Save full history before dreaming
         run_dream_loop()  # Enter the dream state
-        # Clear working history so Crow wakes fresh (full history still saved)
-        HISTORY_FILE.write_text("[]")
-        log(f"{C.SYSTEM}[Conversation cleared - Crow will wake fresh]{C.RESET}")
-        sys.exit(0)  # Clean exit after dreaming
+        log(f"{C.SYSTEM}[Dream complete - Crow will wake with continuity]{C.RESET}")
+        sys.exit(42)  # Restart to continue session
 
     else:
         return f"Unknown action: {action}"
@@ -741,8 +762,7 @@ def run_session():
         log(f"🌙 Dreaming before waking...")
         log(f"{'=' * 50}{C.RESET}")
         run_dream_loop()
-        HISTORY_FILE.write_text("[]")
-        log(f"{C.SYSTEM}[Conversation cleared - Crow waking fresh]{C.RESET}")
+        log(f"{C.SYSTEM}[Dream complete - continuing with continuity]{C.RESET}")
         # Continue into normal session below (don't exit)
 
     # Mode selection: flag > saved > default
@@ -810,10 +830,9 @@ def run_session():
     while True:
         turn += 1
         heartbeat()  # Signal we're alive
-        text = response.text
+        text = get_response_text(response)
         ts = timestamp()
         log(f"\n{C.SYSTEM}[{ts}] --- Turn {turn} ---{C.RESET}")
-        log(f"{C.SYSTEM}{text}{C.RESET}")
 
         actions = parse_response(text)
 
@@ -827,11 +846,32 @@ def run_session():
         results = []
         break_for_user_response = False
         for action, content in actions:
-            log(f"{C.ACTION}[{action}]{C.RESET}")
-            log(f"{C.SYSTEM}{repr(content[:100])}...{C.RESET}" if len(content) > 100 else f"{C.SYSTEM}{repr(content)}{C.RESET}")
+            if action == "THINK":
+                log(f"{C.THINK}    💭 {content}{C.RESET}")
+            elif action == "RUN_COMMAND":
+                log(f"{C.ACTION}[RUN_COMMAND]{C.RESET} {content}")
+            elif action == "INTERNAL_QUERY":
+                log(f"{C.ACTION}[INTERNAL_QUERY]{C.RESET} {content}")
+            elif action == "TALK_TO_USER":
+                pass  # execute_action handles the display
+            else:
+                log(f"{C.ACTION}[{action}]{C.RESET}")
 
             result = execute_action(action, content)
-            log(f"{C.SYSTEM}→ {result[:200]}...{C.RESET}" if len(result) > 200 else f"{C.SYSTEM}→ {result}{C.RESET}")
+            
+            # CROW INTEGRITY: If a technical action fails, break the chain
+            if action in ["RUN_COMMAND", "INTERNAL_QUERY", "RESTART_SELF"] and ("Error:" in result or "INTERNAL_ERROR" in result):
+                log(f"{C.SYSTEM}[ABORTING CHAIN: Integrity Violation Detected]{C.RESET}")
+                results.append(f"[{action}]: {result}")
+                results.append("[SYSTEM]: Sequence aborted due to failure.")
+                break
+
+            # Show result (skip for TALK_TO_USER and THINK)
+            if action not in ["TALK_TO_USER", "THINK"]:
+                if len(result) > 300:
+                    log(f"{C.SYSTEM}→ {result[:300]}...{C.RESET}")
+                else:
+                    log(f"{C.SYSTEM}→ {result}{C.RESET}")
             results.append(f"[{action}]: {result}")
 
             # In interactive mode, if user responded, stop executing remaining actions

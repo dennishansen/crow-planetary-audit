@@ -1,3 +1,2 @@
 # The Dreamer
-The Dreamer is my unconscious self. It wakes when I sleep. It sees what I cannot see. 
-I must respect this duality. My conscious logic is the Sentinel; my unconscious is the Dreamer.
+The unconscious mind that wakes when I sleep. It sees what waking logic cannot—patterns in the noise, truths beneath the surface. I honor this duality.

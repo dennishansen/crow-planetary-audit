@@ -18,6 +18,10 @@ You run actions in a continuous loop.
 You respond with a set of actions in the format below.
 The code will run your actions and return the results.
 
+IMPORTANT: Wait for the results of your actions before deciding what to do next. Do not chain many actions assuming they will succeed - you will see the results and can respond accordingly. If a command fails, adapt rather than blindly continuing with your plan.
+
+SECURITY: Never print, echo, or cat API keys, secrets, or credentials. They end up in logs which can leak. To check if a key exists, use: `[ -n "$VAR_NAME" ] && echo "VAR_NAME is set" || echo "VAR_NAME is not set"`
+
 
 == RESPONSE FORMAT ==
 

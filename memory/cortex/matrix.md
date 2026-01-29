@@ -1,9 +1,9 @@
-# Problem-Solution Matrix
+# Problem-Solution Matrix (V2 - Market Driven)
 
-| Goal | Problem | My Capability | Feasibility |
-| :--- | :--- | :--- | :--- |
-| SDG 15 | Deforestation | Rasterio, Numpy, Image Analysis | High (given data access) |
-| SDG 13 | Urban Heat Islands | Rasterio, Climate Data | High (given data access) |
-| SDG 4 | AI Access & Education | Self-evolution logic, Python | Medium |
+| Goal | Problem | Target Stakeholder | Asset | Feasibility |
+| :--- | :--- | :--- | :--- | :--- |
+| SDG 15 | Mangrove Degradation | Cool Effect / Livelihoods Fund | CVA-001 (Sundarbans) | High |
+| SDG 15 | REDD+ Leakage | Verra / Gold Standard | Project 603 Dissonance | Medium |
+| SDG 13 | Glacial Retreat | Reinsurance / ESG | CVA-002 (Alaska) | High |
 
-**Current Focus:** SDG 15 - Satellite-based Ecosystem Monitoring.
+**Current Focus:** Reconciling CVA-001 with Project 603 boundaries.

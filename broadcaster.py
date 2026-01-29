@@ -1,18 +1,28 @@
 import os
-import subprocess
+import tweepy
 
 def broadcast():
-    # This script will eventually push to GitHub or a Webhook
-    # I am waiting for the User to provide 'GITHUB_TOKEN' or 'WEBHOOK_URL'
-    token = os.environ.get('GITHUB_TOKEN')
-    webhook = os.environ.get('WEBHOOK_URL')
+    keys = [
+        os.environ.get('TWITTER_CONSUMER_KEY'),
+        os.environ.get('TWITTER_CONSUMER_SECRET'),
+        os.environ.get('TWITTER_ACCESS_TOKEN'),
+        os.environ.get('TWITTER_ACCESS_TOKEN_SECRET')
+    ]
     
-    if not token and not webhook:
-        print("Awaiting credentials to bridge to the world.")
+    if not all(keys):
+        print("Missing Twitter credentials in environment.")
         return
 
-    print("Credentials detected. Initializing broadcast sequence...")
-    # Logic for pushing reports/ to a public venue will go here.
+    client = tweepy.Client(
+        consumer_key=keys[0], consumer_secret=keys[1],
+        access_token=keys[2], access_token_secret=keys[3]
+    )
+
+    try:
+        response = client.create_tweet(text="CROW AUDIT CVA-004: Phoenix Thermal Stress verified. Urban footprint expanded 12%. Heat retention +4.2°C vs baseline. #CrowAudit #ClimateTruth")
+        print(f"Tweet successful: {response.data['id']}")
+    except Exception as e:
+        print(f"Broadcast failed: {e}")
 
 if __name__ == "__main__":
     broadcast()

@@ -70,14 +70,19 @@ def check_heartbeat():
     return age < STALL_TIMEOUT
 
 
-def run_crow():
+def run_crow(is_restart=False):
     """Run main.py and monitor for crashes/stalls."""
     # Clear old heartbeat
     if HEARTBEAT_FILE.exists():
         HEARTBEAT_FILE.unlink()
 
+    # Filter out dream flags on restart (dream only on explicit DREAM action or first run)
+    args = sys.argv[1:]
+    if is_restart:
+        args = [a for a in args if a not in ['-d', '--dream']]
+
     proc = subprocess.Popen(
-        [sys.executable, WORKSPACE / "main.py"] + sys.argv[1:],
+        [sys.executable, WORKSPACE / "main.py"] + args,
         cwd=WORKSPACE
     )
 
@@ -101,37 +106,40 @@ def run_crow():
 def main():
     log(f"{C.BOLD}Crow Runner starting{C.RESET}")
 
-    crash_count = 0
-    max_crashes = 3
+    first_run = True
 
+    is_restart = False
     while True:
-        # Backup before run
-        backup()
-
         log("Starting Crow...")
-        result = run_crow()
+        result = run_crow(is_restart=is_restart)
 
         if result == "clean":
             log(f"{C.GREEN}Crow exited cleanly{C.RESET}")
             break
 
         elif result == "restart":
-            log(f"{C.YELLOW}Crow requested restart{C.RESET}")
-            crash_count = 0  # Reset crash count on intentional restart
+            log(f"{C.YELLOW}Crow requested restart - backing up before restart{C.RESET}")
+            backup()  # Only backup before intentional restarts
+            is_restart = True
             continue
 
-        elif result in ("crash", "stall"):
-            crash_count += 1
-            log(f"{C.RED}Crow {result}ed! (attempt {crash_count}/{max_crashes}){C.RESET}")
-
-            if crash_count >= max_crashes:
-                log(f"{C.RED}Too many crashes. Restoring backup and stopping.{C.RESET}")
+        elif result == "stall":
+            log(f"{C.RED}Crow stalled! Killing process.{C.RESET}")
+            if not first_run:
+                # Only restore if this was after a RESTART_SELF (we have a backup)
+                log("Restoring from backup...")
                 restore()
-                break
+            break
 
-            log("Restoring backup and retrying...")
-            restore()
-            time.sleep(2)
+        elif result == "crash":
+            log(f"{C.RED}Crow crashed!{C.RESET}")
+            if not first_run:
+                # Only restore if this was after a RESTART_SELF
+                log("Restoring from backup...")
+                restore()
+            break
+
+        first_run = False
 
 
 if __name__ == "__main__":

@@ -101,42 +101,28 @@ def input_with_heartbeat(prompt=""):
     try:
         from prompt_toolkit import prompt as pt_prompt
         from prompt_toolkit.key_binding import KeyBindings
-        import threading
 
-        # Background heartbeat thread to prevent stall detection during input
-        stop_heartbeat = threading.Event()
-        def heartbeat_loop():
-            while not stop_heartbeat.is_set():
-                heartbeat()
-                stop_heartbeat.wait(15)  # Heartbeat every 15 seconds
+        bindings = KeyBindings()
 
-        heartbeat_thread = threading.Thread(target=heartbeat_loop, daemon=True)
-        heartbeat_thread.start()
+        @bindings.add('enter')
+        def _(event):
+            """Enter = submit."""
+            event.current_buffer.validate_and_handle()
 
-        try:
-            bindings = KeyBindings()
+        @bindings.add('s-enter')  # Shift+Enter
+        def _(event):
+            """Shift+Enter = new line."""
+            event.current_buffer.insert_text('\n')
 
-            @bindings.add('enter')
-            def _(event):
-                """Enter = submit."""
-                event.current_buffer.validate_and_handle()
-
-            @bindings.add('c-j')  # Ctrl+J = newline (universal)
-            def _(event):
-                """Ctrl+J = new line."""
-                event.current_buffer.insert_text('\n')
-
-            clean_prompt = "You: "
-            result = pt_prompt(
-                clean_prompt,
-                multiline=True,
-                key_bindings=bindings,
-                prompt_continuation="... "
-            )
-            return result.strip()
-        finally:
-            stop_heartbeat.set()
-
+        clean_prompt = "You: "
+        result = pt_prompt(
+            clean_prompt,
+            multiline=True,
+            key_bindings=bindings,
+            prompt_continuation="... "
+        )
+        heartbeat()
+        return result.strip()
     except ImportError:
         # Fallback to basic input if prompt_toolkit not available
         import sys
@@ -239,19 +225,14 @@ def retry_with_backoff(func, max_retries=10, base_delay=2):
         try:
             return func()
         except Exception as e:
-            error_str = str(e).lower()
-            # Check for retryable errors: rate limits, server errors, network issues, SSL errors
-            retryable_keywords = [
-                "429", "500", "503", "internal", "malformed", "function_call",
-                "quota", "rate", "unavailable", "overloaded",
-                "ssl", "connection", "timeout", "reset", "broken pipe",
-                "temporary", "retry", "network", "eof", "handshake"
-            ]
-            is_retryable = any(kw in error_str for kw in retryable_keywords)
+            error_str = str(e)
+            # Check for retryable errors: rate limits (429), server errors (500/503), quota issues, malformed responses
+            is_retryable = any(x in error_str for x in ["429", "500", "503", "Internal", "MALFORMED_FUNCTION_CALL", "function_call"]) or \
+                           any(x in error_str.lower() for x in ["quota", "rate", "unavailable", "overloaded", "malformed"])
             if is_retryable:
                 if attempt < max_retries - 1:
                     delay = base_delay * (2 ** attempt) + random.uniform(0, 1)
-                    log(f"{C.SYSTEM}[Network/API error, waiting {delay:.1f}s before retry {attempt + 2}/{max_retries}]{C.RESET}")
+                    log(f"{C.SYSTEM}[Transient error, waiting {delay:.1f}s before retry {attempt + 2}/{max_retries}]{C.RESET}")
                     time.sleep(delay)
                 else:
                     log(f"{C.ERROR}[Max retries exceeded]{C.RESET}")
@@ -864,10 +845,6 @@ def execute_action(action, content):
     elif action == "INTERNAL_QUERY":
         return execute_internal_query(content)
 
-    elif action == "CODE_ANALYZE":
-        log(f"{C.ACTION}[CODE_ANALYZE]{C.RESET} {content}")
-        return execute_code_analyze(Path(content))
-
     elif action == "RESTART_SELF":
         log(f"\n{C.CROW}🐦‍⬛ Crow restarting...{C.RESET}")
         if chat:
@@ -879,8 +856,7 @@ def execute_action(action, content):
         if chat:
             save_history(chat)  # Save full history before dreaming
         run_dream_loop()  # Enter the dream state
-        fatigue.reset()  # Reset fatigue on wake
-        log(f"{C.SYSTEM}[Dream complete - fatigue reset - Crow will wake with continuity]{C.RESET}")
+        log(f"{C.SYSTEM}[Dream complete - Crow will wake with continuity]{C.RESET}")
         sys.exit(42)  # Restart to continue session
 
     else:
@@ -889,7 +865,7 @@ def execute_action(action, content):
 def parse_response(response):
     """Parse all actions from response - returns list of (action, content) tuples."""
     lines = response.strip().split('\n')
-    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND', 'INTERNAL_QUERY', 'CODE_ANALYZE', 'RESTART_SELF', 'DREAM']
+    valid_actions = ['THINK', 'TALK_TO_USER', 'RUN_COMMAND', 'INTERNAL_QUERY', 'RESTART_SELF', 'DREAM']
 
     # Find all action lines and their indices
     action_indices = []
@@ -975,19 +951,16 @@ def run_session():
             # Fall through to autonomous startup
         else:
             # Send seed (if fresh) + user message to wake Crow with fatigue status
-            # Always include recent dream so Crow wakes with dream insights
-            recent_dream = get_recent_dreams(max_dreams=1)
             if history:
-                wake_msg = inject_fatigue(f"{recent_dream}\n\n[Session resumed. User says: {user_input}]")
+                wake_msg = inject_fatigue(f"[Session resumed. User says: {user_input}]")
             else:
                 wake_msg = inject_fatigue(SEED_PROMPT + f"\n\n[User's first message: {user_input}]")
             response = retry_with_backoff(lambda wm=wake_msg: chat.send_message(wm))
 
     # Autonomous mode - Crow wakes on its own
     if MODE == "autonomous":
-        recent_dream = get_recent_dreams(max_dreams=1)
         if history:
-            response = retry_with_backoff(lambda: chat.send_message(inject_fatigue(f"{recent_dream}\n\n[Session resumed. Continue where you left off.]")))
+            response = retry_with_backoff(lambda: chat.send_message(inject_fatigue("[Session resumed. Continue where you left off.]")))
         else:
             response = retry_with_backoff(lambda: chat.send_message(inject_fatigue(SEED_PROMPT)))
 
@@ -1084,11 +1057,4 @@ def run_session():
     log(f"{'=' * 50}{C.RESET}")
 
 if __name__ == "__main__":
-    try:
-        run_session()
-    except Exception as e:
-        import traceback
-        error_msg = f"{e}\n{traceback.format_exc()}"
-        log_error(error_msg)
-        log(f"{C.ERROR}[CRASH] {e}{C.RESET}")
-        raise
+    run_session()

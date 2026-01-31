@@ -1,0 +1,11 @@
+{
+  "tiers": [
+    {"model": "anthropic/claude-opus-4.5", "turns": 3, "context_tokens": 200000, "chars_per_token": 3},
+    {"model": "google/gemini-2.5-flash", "turns": 25, "context_tokens": 1000000, "chars_per_token": 4},
+    {"model": "google/gemini-2.0-flash-001", "turns": 5, "context_tokens": 1000000, "chars_per_token": 4}
+  ],
+  "warning_threshold": 0.80,
+  "auto_sleep": true,
+  "context_utilization": 0.80,
+  "chars_per_token": 4
+}
